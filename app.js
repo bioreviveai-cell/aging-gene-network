@@ -1,388 +1,379 @@
 /**
- * Aging Gene Network — app.js
+ * Aging Gene Network — app.js (canvas edition)
  *
- * DATA SOURCE: genes.json + meta.json (generated from Open Genes SQL dump)
- * These are static files in the same directory, so the tool works
- * with zero API calls and zero backend.
+ * WHY THIS IS FAST:
+ *   All graph computation (layout positions, edges, centrality) is done
+ *   ONCE in Python (build_graph.py) and baked into graph.json. The browser
+ *   never runs a physics simulation. It just paints precomputed x,y
+ *   positions onto a <canvas> — one draw call, no per-frame solving.
+ *   This is the single biggest latency fix: we moved O(n log n) physics
+ *   and O(n^2) edge-building off the main thread entirely.
  *
- * HOW IT WORKS:
- * 1. LOAD    → fetch genes.json and meta.json on page load
- * 2. FILTER  → user picks hallmark / confidence / lifespan effect
- * 3. EDGES   → two genes share an edge if they share an aging hallmark
- * 4. RENDER  → vis-network draws the force-directed graph
- * 5. DETAIL  → click any node to see the full gene card
- *
- * CONFIDENCE LEVELS (from Open Genes):
- *   1 = highest  2 = high  3 = moderate  4 = low  5 = lowest
- *
- * LIFESPAN VALUES: 'increases' | 'decreases' | 'both' | 'unknown'
+ * WHAT'S NEW — BRIDGE GENES:
+ *   build_graph.py computes betweenness centrality on the full graph and a
+ *   "bridge score" = betweenness x number of distinct hallmarks reachable.
+ *   A high bridge score means the gene links otherwise-separate aging
+ *   mechanisms — a candidate for influencing multiple hallmarks at once.
+ *   The right-hand panel ranks them; clicking one zooms to it in the graph.
  */
 
-// ─── API / data paths ────────────────────────────────────────────────────────
-const DATA_GENES = './genes.json';
+const DATA_GRAPH = './graph.json';
 const DATA_META  = './meta.json';
+const DATA_HUBS  = './hubs.json';
 
 // ─── State ───────────────────────────────────────────────────────────────────
-let network      = null;
-let allGenes     = [];
-let nodesDataset = null;
-let edgesDataset = null;
-
-// ─── DOM refs ─────────────────────────────────────────────────────────────────
-const fetchBtn    = document.getElementById('fetch-btn');
-const hallmarkSel = document.getElementById('hallmark-select');
-const criteriaSel = document.getElementById('criteria-select');
-const effectSel   = document.getElementById('effect-select');
-const limitSel    = document.getElementById('limit-select');
-const networkDiv  = document.getElementById('network');
-const graphState  = document.getElementById('graph-state');
-const stateMsg    = document.getElementById('state-message');
-const stateSub    = document.getElementById('state-sub');
-const detailPanel = document.getElementById('detail-panel');
-const panelContent= document.getElementById('panel-content');
-const panelClose  = document.getElementById('panel-close');
-const statsBar    = document.getElementById('stats-bar');
-const statNodes   = document.getElementById('stat-nodes');
-const statEdges   = document.getElementById('stat-edges');
-const statTopHub  = document.getElementById('stat-top-hub');
-const geneBadge   = document.getElementById('gene-count-badge');
+let graph = null;      // {nodes, edges} from graph.json
+let hubs  = [];        // top bridge genes
+let view  = { zoom: 1, panX: 0, panY: 0 };  // camera
+let drawNodes = [];    // currently visible nodes (post-filter)
+let drawEdges = [];
+let hoverNode = null;
+let selectedNode = null;
 
 // ─── Colors ───────────────────────────────────────────────────────────────────
 const COLORS = {
-  increases: { bg: '#1D9E75', border: '#0F6E56' },
-  decreases: { bg: '#D85A30', border: '#993C1D' },
-  both:      { bg: '#7F77DD', border: '#534AB7' },
-  unknown:   { bg: '#5F5E5A', border: '#444441' },
+  increases: '#1D9E75', decreases: '#D85A30',
+  both: '#7F77DD',      unknown: '#5F5E5A',
 };
+const EDGE_COLOR = 'rgba(120,119,221,0.10)';
+const EDGE_HOVER = 'rgba(159,169,236,0.6)';
 
-// ─── 1. BOOTSTRAP ─────────────────────────────────────────────────────────────
+// ─── DOM ─────────────────────────────────────────────────────────────────────
+const canvas    = document.getElementById('network-canvas');
+const ctx       = canvas.getContext('2d');
+const wrap      = document.getElementById('graph-wrap');
+const fetchBtn  = document.getElementById('fetch-btn');
+const hallmarkSel = document.getElementById('hallmark-select');
+const criteriaSel = document.getElementById('criteria-select');
+const effectSel   = document.getElementById('effect-select');
+const highlightSel= document.getElementById('highlight-select');
+const graphState= document.getElementById('graph-state');
+const stateMsg  = document.getElementById('state-message');
+const stateSub  = document.getElementById('state-sub');
+const zoomHint  = document.getElementById('zoom-hint');
+const detailPanel = document.getElementById('detail-panel');
+const panelContent= document.getElementById('panel-content');
+const panelClose  = document.getElementById('panel-close');
+const hubsList  = document.getElementById('hubs-list');
+const statsBar  = document.getElementById('stats-bar');
+const statNodes = document.getElementById('stat-nodes');
+const statEdges = document.getElementById('stat-edges');
+const statTopHub= document.getElementById('stat-top-hub');
+const geneBadge = document.getElementById('gene-count-badge');
+
+// ─── Canvas sizing (retina-aware) ──────────────────────────────────────────────
+function resizeCanvas() {
+  const r = wrap.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = r.width  * dpr;
+  canvas.height = r.height * dpr;
+  canvas.style.width  = r.width + 'px';
+  canvas.style.height = r.height + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  render();
+}
+window.addEventListener('resize', resizeCanvas);
+
+// ─── 1. LOAD ─────────────────────────────────────────────────────────────────
 async function init() {
-  setLoadingState('Loading gene database…', '');
-
-  const [genesResp, metaResp] = await Promise.all([
-    fetch(DATA_GENES),
-    fetch(DATA_META),
+  setState('Loading precomputed network…', '');
+  const [gResp, mResp, hResp] = await Promise.all([
+    fetch(DATA_GRAPH), fetch(DATA_META), fetch(DATA_HUBS),
   ]);
+  if (!gResp.ok) throw new Error(`graph.json (${gResp.status})`);
+  graph = await gResp.json();
+  const meta = await mResp.json();
+  hubs = await hResp.json();
 
-  if (!genesResp.ok) throw new Error(`Could not load genes.json (${genesResp.status})`);
-  if (!metaResp.ok)  throw new Error(`Could not load meta.json (${metaResp.status})`);
-
-  allGenes = await genesResp.json();
-  const meta = await metaResp.json();
-
-  // Populate hallmark dropdown from meta.json
   meta.hallmarks.forEach(h => {
-    const opt = document.createElement('option');
-    opt.value = h.id;
-    opt.textContent = h.name;
-    hallmarkSel.appendChild(opt);
+    const o = document.createElement('option');
+    o.value = h.id; o.textContent = h.name;
+    hallmarkSel.appendChild(o);
   });
 
-  // Update the confidence dropdown labels to match Open Genes naming
-  criteriaSel.innerHTML = `
-    <option value="">Any confidence</option>
-    <option value="1">Highest only</option>
-    <option value="2" selected>High or above</option>
-    <option value="3">Moderate or above</option>
-    <option value="5">All genes</option>
-  `;
-
-  geneBadge.textContent = `${allGenes.length} genes loaded`;
+  geneBadge.textContent = `${graph.nodes.length} networked genes`;
   geneBadge.classList.remove('hidden');
 
-  // Reset to idle state
-  graphState.style.display = 'flex';
-  stateMsg.innerHTML = 'Choose filters and click <strong>Build network</strong>';
-  stateSub.textContent = `${allGenes.length} aging genes loaded from database`;
-  networkDiv.style.opacity = '1';
+  renderHubs();
+  setState('Click <strong>Build network</strong> to render', `${graph.nodes.length} genes · ${graph.edges.length} connections, all precomputed`);
   fetchBtn.disabled = false;
-  fetchBtn.textContent = 'Build network';
 }
 
-// ─── 2. FILTER ───────────────────────────────────────────────────────────────
-function filterGenes() {
-  const maxLevel   = criteriaSel.value ? parseInt(criteriaSel.value) : 5;
+// ─── 2. FILTER + fit camera ────────────────────────────────────────────────────
+function buildView() {
+  const maxLevel   = parseInt(criteriaSel.value);
   const effectVal  = effectSel.value;
   const hallmarkId = hallmarkSel.value ? parseInt(hallmarkSel.value) : null;
-  const limit      = parseInt(limitSel.value);
 
-  let filtered = allGenes.filter(gene => {
-    // Confidence: level 1=highest, 5=lowest. maxLevel means "this level or better"
-    if (gene.confidence_level > maxLevel) return false;
-
-    // Lifespan
-    if (effectVal && gene.lifespan !== effectVal) return false;
-
-    // Hallmark
+  const nodeById = {};
+  drawNodes = graph.nodes.filter(n => {
+    if (n.conf > maxLevel) return false;
+    if (effectVal && n.lifespan !== effectVal) return false;
     if (hallmarkId) {
-      const has = gene.agingMechanisms.some(m => m.id === hallmarkId);
-      if (!has) return false;
+      // hallmark names are stored; match by id requires meta — we match by membership
+      // graph.json stores hallmark names, so we filter using the hub/meta mapping:
+      if (!n._hallmarkIds) return true; // fallback
     }
-
     return true;
   });
 
-  // Already sorted by confidence; take top N
-  return filtered.slice(0, limit);
-}
-
-// ─── 3. BUILD EDGES ──────────────────────────────────────────────────────────
-function buildNetwork(genes) {
-  /*
-   * TEACHING NOTE — edge logic:
-   * Two genes are connected if they share ≥1 aging hallmark (mechanism).
-   * Edge weight = number of shared hallmarks.
-   * We cap edges per node (MAX_EDGES) to keep the graph readable.
-   */
-  const MAX_EDGES = 10;
-
-  // hallmark_id → [gene symbols]
-  const hallmarkMap = {};
-  genes.forEach(gene => {
-    gene.agingMechanisms.forEach(m => {
-      if (!hallmarkMap[m.id]) hallmarkMap[m.id] = [];
-      hallmarkMap[m.id].push(gene.symbol);
-    });
-  });
-
-  // Count shared hallmarks for each gene pair
-  const pairCount = {};
-  Object.values(hallmarkMap).forEach(symbols => {
-    for (let i = 0; i < symbols.length; i++) {
-      for (let j = i + 1; j < symbols.length; j++) {
-        const key = [symbols[i], symbols[j]].sort().join('|||');
-        pairCount[key] = (pairCount[key] || 0) + 1;
-      }
-    }
-  });
-
-  // Build edges, respecting per-node cap
-  const edgeCount = {};
-  const edges = [];
-  // Sort by shared count descending so strongest edges get priority
-  const sortedPairs = Object.entries(pairCount).sort((a,b) => b[1]-a[1]);
-  for (const [key, count] of sortedPairs) {
-    const [a, b] = key.split('|||');
-    if ((edgeCount[a]||0) >= MAX_EDGES || (edgeCount[b]||0) >= MAX_EDGES) continue;
-    edgeCount[a] = (edgeCount[a]||0) + 1;
-    edgeCount[b] = (edgeCount[b]||0) + 1;
-    edges.push({ from: a, to: b, value: count });
+  // Hallmark filter by name match (meta provides id->name; we filter on names)
+  if (hallmarkId) {
+    const hname = hallmarkSel.options[hallmarkSel.selectedIndex].textContent;
+    drawNodes = drawNodes.filter(n => n.hallmarks.includes(hname));
   }
 
-  // Build nodes
-  const nodes = genes.map(gene => {
-    const c = COLORS[gene.lifespan] || COLORS.unknown;
-    // Node size based on confidence (level 1=best → bigger node)
-    const sizeScore = 6 - gene.confidence_level; // 1→5, 5→1
-    return {
-      id:    gene.symbol,
-      label: gene.symbol,
-      title: `<div style="font:12px system-ui;padding:4px 6px;max-width:180px">
-                <strong>${gene.symbol}</strong><br>
-                <span style="color:#888">${gene.name||''}</span><br>
-                Confidence: ${gene.confidence_name}<br>
-                Lifespan: ${gene.lifespan}
-              </div>`,
-      value: sizeScore,
-      color: { background: c.bg, border: c.border,
-               highlight: { background: c.bg, border: '#fff' },
-               hover:      { background: c.bg, border: '#fff' } },
-      font:  { color: '#ffffff', size: 11, face: 'Inter, system-ui, sans-serif' },
-      _raw:  gene,
-    };
-  });
+  drawNodes.forEach(n => nodeById[n.id] = n);
+  const visible = new Set(drawNodes.map(n => n.id));
+  drawEdges = graph.edges.filter(e => visible.has(e.s) && visible.has(e.t));
 
-  return { nodes, edges };
+  fitCamera();
+  updateStats();
 }
 
-// ─── 4. RENDER ───────────────────────────────────────────────────────────────
-function renderNetwork(nodes, edges) {
-  if (network) { network.destroy(); network = null; }
+function fitCamera() {
+  if (!drawNodes.length) return;
+  const xs = drawNodes.map(n => n.x), ys = drawNodes.map(n => n.y);
+  const minx = Math.min(...xs), maxx = Math.max(...xs);
+  const miny = Math.min(...ys), maxy = Math.max(...ys);
+  const r = wrap.getBoundingClientRect();
+  const pad = 60;
+  const zx = (r.width - pad*2) / (maxx - minx || 1);
+  const zy = (r.height - pad*2) / (maxy - miny || 1);
+  view.zoom = Math.min(zx, zy);
+  view.panX = pad - minx * view.zoom + (r.width - pad*2 - (maxx-minx)*view.zoom)/2;
+  view.panY = pad - miny * view.zoom + (r.height - pad*2 - (maxy-miny)*view.zoom)/2;
+}
 
-  nodesDataset = new vis.DataSet(nodes);
-  edgesDataset = new vis.DataSet(edges);
+// world → screen
+function sx(x) { return x * view.zoom + view.panX; }
+function sy(y) { return y * view.zoom + view.panY; }
 
-  const options = {
-    nodes: {
-      shape: 'dot',
-      scaling: { min: 10, max: 38 },
-      borderWidth: 1.5,
-    },
-    edges: {
-      scaling: { min: 0.5, max: 5 },
-      color: { color: '#2a2d33', highlight: '#888780', hover: '#5F5E5A' },
-      smooth: { type: 'continuous' },
-    },
-    physics: {
-      barnesHut: {
-        gravitationalConstant: -4500,
-        centralGravity: 0.25,
-        springLength: 130,
-        springConstant: 0.04,
-        damping: 0.09,
-      },
-      stabilization: { iterations: 300, updateInterval: 20 },
-    },
-    interaction: { hover: true, tooltipDelay: 150 },
-  };
+// ─── 3. RENDER (single draw, no physics) ───────────────────────────────────────
+function nodeRadius(n) {
+  const base = 3 + (6 - n.conf);              // confidence → size
+  const hl = highlightSel.value;
+  if (hl === 'bridge')  return base + n.bridge * 14;
+  if (hl === 'degree')  return base + Math.min(n.degree / 50, 10);
+  return base;
+}
 
-  network = new vis.Network(
-    networkDiv,
-    { nodes: nodesDataset, edges: edgesDataset },
-    options
-  );
+function render() {
+  if (!ctx) return;
+  const r = wrap.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
+  if (!drawNodes.length) return;
 
-  network.on('stabilizationProgress', p => {
-    const pct = Math.round(p.iterations / p.total * 100);
-    stateMsg.textContent = `Laying out network… ${pct}%`;
-  });
+  // edges
+  ctx.lineWidth = 0.5;
+  for (const e of drawEdges) {
+    const a = nById(e.s), b = nById(e.t);
+    if (!a || !b) continue;
+    const isHot = hoverNode && (e.s === hoverNode.id || e.t === hoverNode.id);
+    ctx.strokeStyle = isHot ? EDGE_HOVER : EDGE_COLOR;
+    ctx.lineWidth = isHot ? 1.2 : 0.5;
+    ctx.beginPath();
+    ctx.moveTo(sx(a.x), sy(a.y));
+    ctx.lineTo(sx(b.x), sy(b.y));
+    ctx.stroke();
+  }
 
-  network.on('stabilizationIterationsDone', () => {
-    graphState.style.display = 'none';
-    networkDiv.style.opacity = '1';
-    updateStats(nodes, edges);
-  });
-
-  network.on('click', params => {
-    if (params.nodes.length > 0) {
-      openDetailPanel(nodesDataset.get(params.nodes[0]));
-    } else {
-      closeDetailPanel();
+  // nodes
+  const hl = highlightSel.value;
+  for (const n of drawNodes) {
+    const rad = nodeRadius(n);
+    const px = sx(n.x), py = sy(n.y);
+    ctx.beginPath();
+    ctx.arc(px, py, rad, 0, Math.PI*2);
+    ctx.fillStyle = COLORS[n.lifespan] || COLORS.unknown;
+    ctx.fill();
+    // ring for highlighted top genes
+    if (hl === 'bridge' && n.bridge > 0.1) {
+      ctx.strokeStyle = '#FAC775'; ctx.lineWidth = 1.5; ctx.stroke();
     }
+    if (n === selectedNode) {
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    }
+  }
+
+  // labels only when zoomed in or for big nodes
+  ctx.fillStyle = '#e8e6df';
+  ctx.font = '11px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  for (const n of drawNodes) {
+    const rad = nodeRadius(n);
+    if (view.zoom > 1.4 || rad > 9 || n === hoverNode) {
+      ctx.fillText(n.id, sx(n.x), sy(n.y) - rad - 3);
+    }
+  }
+}
+
+const _idx = {};
+function nById(id) { return _idx[id]; }
+function reindex() { for (const k in _idx) delete _idx[k]; drawNodes.forEach(n => _idx[n.id] = n); }
+
+// ─── 4. INTERACTION ────────────────────────────────────────────────────────────
+let dragging = false, lastX = 0, lastY = 0, moved = false;
+
+canvas.addEventListener('mousedown', e => { dragging = true; moved = false; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener('mouseup', () => { dragging = false; });
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  if (dragging) {
+    view.panX += e.clientX - lastX;
+    view.panY += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    moved = true;
+    render();
+    return;
+  }
+  // hover detection
+  const prev = hoverNode;
+  hoverNode = pickNode(mx, my);
+  canvas.style.cursor = hoverNode ? 'pointer' : 'grab';
+  if (hoverNode !== prev) render();
+});
+
+canvas.addEventListener('click', e => {
+  if (moved) return;
+  const r = canvas.getBoundingClientRect();
+  const n = pickNode(e.clientX - r.left, e.clientY - r.top);
+  if (n) { selectedNode = n; openDetail(n); render(); }
+  else   { selectedNode = null; closeDetail(); render(); }
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const factor = e.deltaY < 0 ? 1.1 : 0.9;
+  // zoom toward cursor
+  const wx = (mx - view.panX) / view.zoom;
+  const wy = (my - view.panY) / view.zoom;
+  view.zoom *= factor;
+  view.panX = mx - wx * view.zoom;
+  view.panY = my - wy * view.zoom;
+  render();
+}, { passive: false });
+
+function pickNode(mx, my) {
+  // reverse iterate so top-drawn nodes win
+  for (let i = drawNodes.length - 1; i >= 0; i--) {
+    const n = drawNodes[i];
+    const dx = mx - sx(n.x), dy = my - sy(n.y);
+    const rad = nodeRadius(n) + 3;
+    if (dx*dx + dy*dy <= rad*rad) return n;
+  }
+  return null;
+}
+
+// ─── 5. BRIDGE GENES PANEL ─────────────────────────────────────────────────────
+function renderHubs() {
+  hubsList.innerHTML = hubs.map((h, i) => `
+    <div class="hub-item" data-gene="${h.id}">
+      <div class="hub-rank">${i+1}</div>
+      <div class="hub-body">
+        <div class="hub-sym">${h.id}
+          <span class="hub-dot" style="background:${COLORS[h.lifespan]||COLORS.unknown}"></span>
+        </div>
+        <div class="hub-meta">${h.n_hallmarks} hallmarks · ${h.degree} links</div>
+        <div class="hub-bar"><div class="hub-fill" style="width:${(h.bridge*100).toFixed(0)}%"></div></div>
+      </div>
+    </div>
+  `).join('');
+
+  hubsList.querySelectorAll('.hub-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const sym = el.dataset.gene;
+      const n = graph.nodes.find(x => x.id === sym);
+      if (!n) return;
+      // make sure it's visible, then zoom to it
+      if (!drawNodes.includes(n)) { criteriaSel.value = '5'; effectSel.value=''; hallmarkSel.value=''; build(); }
+      zoomTo(n);
+      selectedNode = n; openDetail(n); render();
+    });
   });
 }
 
-// ─── 5. STATS ─────────────────────────────────────────────────────────────────
-function updateStats(nodes, edges) {
-  const deg = {};
-  edges.forEach(e => {
-    deg[e.from] = (deg[e.from]||0) + 1;
-    deg[e.to]   = (deg[e.to]  ||0) + 1;
-  });
-  let topHub = null, topDeg = 0;
-  Object.entries(deg).forEach(([s,d]) => { if (d > topDeg) { topDeg=d; topHub=s; }});
-
-  statNodes.textContent  = `${nodes.length} genes`;
-  statEdges.textContent  = `${edges.length} connections`;
-  statTopHub.textContent = topHub ? `Top hub: ${topHub} (${topDeg})` : '';
-  statsBar.classList.remove('hidden');
+function zoomTo(n) {
+  const r = wrap.getBoundingClientRect();
+  view.zoom = 2.2;
+  view.panX = r.width/2 - n.x * view.zoom;
+  view.panY = r.height/2 - n.y * view.zoom;
 }
 
-// ─── 6. DETAIL PANEL ─────────────────────────────────────────────────────────
-function openDetailPanel(nodeData) {
-  const g = nodeData._raw;
-  if (!g) return;
-
+// ─── 6. DETAIL PANEL ────────────────────────────────────────────────────────────
+function openDetail(n) {
   const effectClass = { increases:'tag-green', decreases:'tag-coral', both:'tag-purple', unknown:'tag-gray' };
   const effectLabel = { increases:'↑ Increases lifespan', decreases:'↓ Decreases lifespan', both:'↕ Both effects', unknown:'— Unknown' };
-
-  const mechHTML = g.agingMechanisms.map(m =>
-    `<span class="tag tag-purple">${m.name}</span>`).join('') || '<span class="dim">None</span>';
-
-  const diseaseHTML = g.diseases.map(d =>
-    `<span class="tag tag-gray">${d}</span>`).join('') || '<span class="dim">None listed</span>';
-
-  const clusterHTML = g.functionalClusters.map(c =>
-    `<span class="tag tag-blue">${c}</span>`).join('') || '<span class="dim">None listed</span>';
-
+  const mech = n.hallmarks.map(h => `<span class="tag tag-purple">${h}</span>`).join('') || '<span class="dim">None</span>';
+  const dis  = (n.diseases||[]).map(d => `<span class="tag tag-gray">${d}</span>`).join('') || '<span class="dim">None listed</span>';
+  const clus = (n.clusters||[]).map(c => `<span class="tag tag-blue">${c}</span>`).join('') || '<span class="dim">None listed</span>';
   const links = [
-    g.ncbi_id  ? `<a href="https://www.ncbi.nlm.nih.gov/gene/${g.ncbi_id}" target="_blank" rel="noopener">NCBI ↗</a>` : '',
-    `<a href="https://open-genes.com/gene/${g.symbol}" target="_blank" rel="noopener">Open Genes ↗</a>`,
-    g.uniprot  ? `<a href="https://www.uniprot.org/uniprot/${g.uniprot}" target="_blank" rel="noopener">UniProt ↗</a>` : '',
-    g.ensembl  ? `<a href="https://ensembl.org/Homo_sapiens/Gene/Summary?g=${g.ensembl}" target="_blank" rel="noopener">Ensembl ↗</a>` : '',
+    n.ncbi_id ? `<a href="https://www.ncbi.nlm.nih.gov/gene/${n.ncbi_id}" target="_blank" rel="noopener">NCBI ↗</a>` : '',
+    `<a href="https://open-genes.com/gene/${n.id}" target="_blank" rel="noopener">Open Genes ↗</a>`,
+    n.uniprot ? `<a href="https://www.uniprot.org/uniprot/${n.uniprot}" target="_blank" rel="noopener">UniProt ↗</a>` : '',
   ].filter(Boolean).join('');
-
-  // Confidence bar: level 1=100%, 5=20%
-  const confPct = ((6 - g.confidence_level) / 5 * 100).toFixed(0);
+  const confPct = ((6 - n.conf)/5*100).toFixed(0);
 
   panelContent.innerHTML = `
     <div class="panel-header">
-      <div class="panel-symbol">${g.symbol}</div>
-      <div class="panel-name">${g.name || g.aliases || ''}</div>
-      <span class="tag ${effectClass[g.lifespan]}">${effectLabel[g.lifespan]}</span>
+      <div class="panel-symbol">${n.id}</div>
+      <div class="panel-name">${n.name||''}</div>
+      <span class="tag ${effectClass[n.lifespan]}">${effectLabel[n.lifespan]}</span>
+    </div>
+    <div class="panel-section metrics-row">
+      <div class="metric"><div class="metric-val">${n.bridge.toFixed(2)}</div><div class="metric-lbl">Bridge score</div></div>
+      <div class="metric"><div class="metric-val">${n.degree}</div><div class="metric-lbl">Connections</div></div>
+      <div class="metric"><div class="metric-val">${n.hallmarks.length}</div><div class="metric-lbl">Hallmarks</div></div>
     </div>
     <div class="panel-section">
       <div class="panel-section-label">Confidence</div>
       <div class="criteria-bar"><div class="criteria-fill" style="width:${confPct}%"></div></div>
-      <div class="criteria-text">${g.confidence_name} (level ${g.confidence_level} of 5)</div>
+      <div class="criteria-text">${n.conf_name} (level ${n.conf} of 5)</div>
     </div>
-    <div class="panel-section">
-      <div class="panel-section-label">Aging hallmarks</div>
-      <div class="tags-row">${mechHTML}</div>
-    </div>
-    <div class="panel-section">
-      <div class="panel-section-label">Functional clusters</div>
-      <div class="tags-row">${clusterHTML}</div>
-    </div>
-    <div class="panel-section">
-      <div class="panel-section-label">Associated diseases</div>
-      <div class="tags-row">${diseaseHTML}</div>
-    </div>
+    <div class="panel-section"><div class="panel-section-label">Aging hallmarks</div><div class="tags-row">${mech}</div></div>
+    <div class="panel-section"><div class="panel-section-label">Functional clusters</div><div class="tags-row">${clus}</div></div>
+    <div class="panel-section"><div class="panel-section-label">Associated diseases</div><div class="tags-row">${dis}</div></div>
     <div class="panel-links">${links}</div>
   `;
   detailPanel.classList.remove('closed');
 }
+function closeDetail() { detailPanel.classList.add('closed'); }
 
-function closeDetailPanel() { detailPanel.classList.add('closed'); }
+// ─── 7. STATS ───────────────────────────────────────────────────────────────────
+function updateStats() {
+  statNodes.textContent = `${drawNodes.length} genes`;
+  statEdges.textContent = `${drawEdges.length} connections`;
+  const top = drawNodes.reduce((a,b) => b.bridge > (a?.bridge||0) ? b : a, null);
+  statTopHub.textContent = top ? `Top bridge: ${top.id}` : '';
+  statsBar.classList.remove('hidden');
+}
 
-// ─── Loading states ───────────────────────────────────────────────────────────
-function setLoadingState(msg, sub) {
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function setState(msg, sub) {
   graphState.style.display = 'flex';
-  stateMsg.innerHTML = msg;
-  stateSub.textContent = sub;
-  networkDiv.style.opacity = '0.2';
+  stateMsg.innerHTML = msg; stateSub.textContent = sub;
+}
+function hideState() { graphState.style.display = 'none'; zoomHint.classList.remove('hidden'); }
+
+function build() {
+  fetchBtn.disabled = true; fetchBtn.textContent = 'Building…';
+  closeDetail(); selectedNode = null;
+  // Precomputed → effectively instant. Timeout lets the button repaint.
+  setTimeout(() => {
+    buildView();
+    reindex();
+    resizeCanvas();   // also calls render()
+    hideState();
+    fetchBtn.disabled = false; fetchBtn.textContent = 'Rebuild';
+  }, 10);
 }
 
-function setErrorState(msg) {
-  graphState.style.display = 'flex';
-  stateMsg.innerHTML = `<span style="color:#E24B4A">⚠ ${msg}</span>`;
-  stateSub.textContent = 'Check that genes.json and meta.json are in the same folder';
-  networkDiv.style.opacity = '1';
-  fetchBtn.disabled = false;
-  fetchBtn.textContent = 'Build network';
-}
+// ─── INIT ────────────────────────────────────────────────────────────────────
+fetchBtn.addEventListener('click', build);
+panelClose.addEventListener('click', () => { closeDetail(); selectedNode = null; render(); });
+highlightSel.addEventListener('change', render);
 
-// ─── Main handler ─────────────────────────────────────────────────────────────
-async function handleBuild() {
-  fetchBtn.disabled = true;
-  fetchBtn.textContent = 'Building…';
-  statsBar.classList.add('hidden');
-  closeDetailPanel();
-  setLoadingState('Filtering genes…', '');
-
-  const filtered = filterGenes();
-  if (filtered.length === 0) {
-    setErrorState('No genes match these filters. Try relaxing confidence or effect filters.');
-    return;
-  }
-
-  setLoadingState(`Building network for ${filtered.length} genes…`, '');
-  const { nodes, edges } = buildNetwork(filtered);
-
-  setLoadingState('Rendering…', '');
-  renderNetwork(nodes, edges);
-
-  fetchBtn.disabled = false;
-  fetchBtn.textContent = 'Rebuild';
-}
-
-// ─── Legend ───────────────────────────────────────────────────────────────────
-function injectLegend() {
-  const l = document.createElement('div');
-  l.className = 'legend';
-  l.innerHTML = `
-    <div class="legend-item"><span class="legend-dot" style="background:#1D9E75"></span><span>Increases lifespan</span></div>
-    <div class="legend-item"><span class="legend-dot" style="background:#D85A30"></span><span>Decreases lifespan</span></div>
-    <div class="legend-item"><span class="legend-dot" style="background:#7F77DD"></span><span>Both effects</span></div>
-    <div class="legend-item"><span class="legend-dot" style="background:#5F5E5A"></span><span>Effect unknown</span></div>
-    <div class="legend-item"><span class="legend-size-hint"></span><span>Node size = confidence</span></div>
-  `;
-  document.getElementById('graph-wrap').appendChild(l);
-}
-
-// ─── INIT ─────────────────────────────────────────────────────────────────────
-fetchBtn.addEventListener('click', handleBuild);
-panelClose.addEventListener('click', closeDetailPanel);
-injectLegend();
-
-init().catch(err => setErrorState(err.message));
+init().catch(err => setState(`<span style="color:#E24B4A">⚠ ${err.message}</span>`, 'Check graph.json, meta.json, hubs.json are present'));

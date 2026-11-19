@@ -1,95 +1,103 @@
 # Aging Gene Network
 
-A live, interactive network visualizer for human aging genes, powered by the [Open Genes API](https://open-genes.com/api/docs). No backend, no build step — pure HTML/JS.
+An interactive network of human aging genes, built from the Open Genes database.
+Pure HTML/JS/canvas — no backend, no build step, no runtime API calls.
 
-## What it does
+## Why it's fast
 
-- Fetches aging gene data live from the Open Genes REST API (no API key needed)
-- Filters genes by aging hallmark, confidence level, and lifespan effect
-- Builds a shared-hallmark network: two genes are connected if they participate in the same aging mechanism
-- Renders an interactive force-directed graph with vis-network.js
-- Click any gene node to see its hallmarks, associated diseases, and functional clusters
+Every expensive computation happens **once, at build time** in Python:
 
-## File structure
+- parsing the SQL dump
+- building the shared-hallmark graph
+- solving the layout (node x,y positions are baked into the data)
+- computing degree + betweenness centrality
+- deriving the bridge-gene scores
+- pruning 41,672 raw edges down to ~3,100 meaningful ones
+
+The browser just **paints precomputed positions on a `<canvas>`** in a single
+draw call. There is no physics simulation and no O(n²) edge-building at runtime,
+which is what made the earlier vis-network version slow.
+
+## What's new: bridge genes
+
+The right-hand panel ranks **bridge genes** — genes that connect the most
+*distinct* aging hallmarks. The score is:
 
 ```
-index.html   — layout and markup
-app.js       — all data fetching, filtering, network building, and rendering logic
-style.css    — dark-themed stylesheet
-netlify.toml — Netlify deployment config
-README.md    — this file
+bridge = betweenness_centrality × (number of distinct hallmarks reachable)
 ```
 
-## Deploy to Netlify via GitHub (step by step)
+A high bridge score means the gene sits between otherwise-separate aging
+mechanisms. Biologically, these are candidates for influencing several
+hallmarks at once — the kind of multi-target node worth a closer look.
+Click any bridge gene to zoom straight to it in the graph.
 
-### 1. Create a GitHub repository
+The top result, PARK7 (DJ-1), is a well-known multi-hallmark aging gene
+(oxidative stress, mitochondria, proteostasis), which is a good sign the
+metric is picking up real biology.
 
-1. Go to [github.com](https://github.com) and click **New repository**
-2. Name it `aging-gene-network` (or anything you like)
-3. Leave it public, no README (you have one already)
-4. Click **Create repository**
+## Files
 
-### 2. Push these files
+```
+index.html       — layout + canvas
+app.js           — canvas renderer, filtering, bridge panel, interaction
+style.css        — dark theme
+graph.json       — precomputed nodes (with x,y + metrics) and pruned edges
+hubs.json        — top 25 bridge genes
+meta.json        — hallmark list for the filter
+extract_genes.py — SQL dump → genes.json  (stage 1)
+build_graph.py   — genes.json → graph.json + hubs.json  (stage 2)
+netlify.toml     — deploy config
+```
+
+## Rebuilding the data
+
+When Open Genes publishes a new SQL dump:
 
 ```bash
-cd path/to/aging-gene-network   # the folder containing these files
+python3 extract_genes.py     # SQL dump  → genes.json + meta.json
+python3 build_graph.py        # genes.json → graph.json + hubs.json
+```
 
+`build_graph.py` needs NetworkX: `pip install networkx`.
+
+### Tuning the graph
+
+In `build_graph.py`:
+- `MIN_WEIGHT` (default 2) — keep edges where genes share at least this many hallmarks
+- `TOP_PER_NODE` (default 6) — each node keeps its strongest N edges so nothing floats away
+
+Lower `MIN_WEIGHT` for a denser graph, raise it for a sparser, faster one.
+
+## Deploy to Netlify
+
+```bash
+cd aging-gene-network
 git init
 git add .
-git commit -m "Initial commit — aging gene network"
+git commit -m "Aging gene network with bridge-gene analysis"
 git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/aging-gene-network.git
+git remote add origin https://github.com/YOU/aging-gene-network.git
 git push -u origin main
 ```
 
-### 3. Connect to Netlify
+Then in Netlify: **Add new site → Import an existing project → GitHub**, pick the
+repo, leave the build command empty, publish directory `.`, deploy. Every push
+auto-deploys.
 
-1. Go to [app.netlify.com](https://app.netlify.com) and click **Add new site → Import an existing project**
-2. Choose **GitHub** and authorize Netlify
-3. Select your `aging-gene-network` repository
-4. Build settings:
-   - **Build command**: leave empty (no build needed)
-   - **Publish directory**: `.` (the root)
-5. Click **Deploy site**
+## Controls
 
-Netlify will deploy in ~30 seconds and give you a URL like `https://aging-gene-network.netlify.app`.
-
-Every time you push to `main`, Netlify auto-deploys.
-
-## Using your SQL dump
-
-Your downloaded Open Genes SQL dump contains the same data as the API but lets you:
-
-1. Run queries locally without hitting the API
-2. Add richer gene data (e.g. protein interaction tables) that the API may not expose
-3. Speed up development (no network latency)
-
-To use it, import the dump into a local PostgreSQL or MySQL instance:
-
-```bash
-# PostgreSQL example
-psql -U postgres -c "CREATE DATABASE opengenes;"
-psql -U postgres -d opengenes -f open_genes_dump.sql
-```
-
-Then query it to generate a static `genes.json` file and serve that alongside your HTML. In `app.js`, change the fetch URL from the API endpoint to `./genes.json`. This is also how you'd add STRING PPI edges — join your gene list against the STRING database locally and export the edges.
-
-## How the edge logic works
-
-Two genes get a network edge when they share an aging hallmark (e.g. both are involved in cellular senescence). The edge weight is the number of shared hallmarks.
-
-This is a **co-annotation** network, not a protein-protein interaction network. It answers: "which genes participate in the same aging mechanism?" 
-
-To add physical PPI edges, pass your gene symbols to the STRING API:
-```
-https://string-db.org/api/json/network?identifiers=FOXO3%0ASIRT1%0ATP53&species=9606
-```
-
-## Filtering guide
-
-| Filter | What it does |
+| Control | Effect |
 |---|---|
-| Aging hallmark | Shows only genes annotated with that specific aging mechanism |
-| Min. criteria met | The number of experimental/evidence criteria the gene satisfies (1–12). Higher = more confidence |
-| Lifespan effect | Filter for genes where intervention increases or decreases lifespan |
-| Show top N | Limits the fetch to N genes (sorted by API default) |
+| Aging hallmark | Show only genes in that mechanism |
+| Confidence | Filter by Open Genes evidence level (highest → all) |
+| Lifespan effect | Increases / decreases / both |
+| Highlight | Size nodes by bridge score or by connection count |
+| Scroll / drag / click | Zoom, pan, open a gene's detail card |
+
+## Next ideas
+
+- Add real protein-protein interaction edges from STRING (precompute them in a
+  third Python stage so runtime stays instant)
+- Color edges by *which* hallmark they come from
+- Export the current filtered view as a `.graphml` for Cytoscape

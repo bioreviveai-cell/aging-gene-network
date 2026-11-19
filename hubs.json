@@ -1,0 +1,367 @@
+[
+  {
+    "id": "PARK7",
+    "name": "Parkinsonism associated deglycase",
+    "bridge": 1.0,
+    "betweenness": 0.1468,
+    "degree": 459,
+    "n_hallmarks": 7,
+    "hallmarks": [
+      "disabled macroautophagy",
+      "sterile inflammation",
+      "impairment of the mitochondrial integrity and biogenesis",
+      "alterations in histone modifications",
+      "degradation of proteolytic systems",
+      "nuclear DNA instability",
+      "transcriptional alterations"
+    ],
+    "lifespan": "increases",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "TBL1X",
+    "name": "transducin beta like 1 X-linked",
+    "bridge": 0.2682,
+    "betweenness": 0.0437,
+    "degree": 299,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "degradation of proteolytic systems",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "SNCA",
+    "name": "synuclein alpha",
+    "bridge": 0.2101,
+    "betweenness": 0.0385,
+    "degree": 325,
+    "n_hallmarks": 3,
+    "hallmarks": [
+      "accumulation of reactive oxygen species",
+      "impairment of the mitochondrial integrity and biogenesis",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "BCL3",
+    "name": "BCL3 transcription coactivator",
+    "bridge": 0.1602,
+    "betweenness": 0.0261,
+    "degree": 371,
+    "n_hallmarks": 3,
+    "hallmarks": [
+      "nuclear DNA instability",
+      "sterile inflammation",
+      "transcriptional alterations"
+    ],
+    "lifespan": "increases",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "ADAM8",
+    "name": "ADAM metallopeptidase domain 8",
+    "bridge": 0.1401,
+    "betweenness": 0.0316,
+    "degree": 128,
+    "n_hallmarks": 3,
+    "hallmarks": [
+      "degradation of proteolytic systems",
+      "changes in the extracellular matrix structure",
+      "sterile inflammation"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "ARMCX3",
+    "name": "armadillo repeat containing X-linked 3",
+    "bridge": 0.1325,
+    "betweenness": 0.0243,
+    "degree": 300,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "impairment of the mitochondrial integrity and biogenesis",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "KDM1A",
+    "name": "lysine demethylase 1A",
+    "bridge": 0.1248,
+    "betweenness": 0.0215,
+    "degree": 338,
+    "n_hallmarks": 3,
+    "hallmarks": [
+      "nuclear DNA instability",
+      "accumulation of reactive oxygen species",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "PRKAR1A",
+    "name": "protein kinase cAMP-dependent type I regulatory subunit alpha",
+    "bridge": 0.095,
+    "betweenness": 0.0186,
+    "degree": 265,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "AMPK pathway dysregulation",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "IFI16",
+    "name": "interferon gamma inducible protein 16",
+    "bridge": 0.0859,
+    "betweenness": 0.0158,
+    "degree": 332,
+    "n_hallmarks": 3,
+    "hallmarks": [
+      "disabled macroautophagy",
+      "transcriptional alterations",
+      "sterile inflammation"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "NPM1",
+    "name": "nucleophosmin 1",
+    "bridge": 0.0801,
+    "betweenness": 0.0131,
+    "degree": 323,
+    "n_hallmarks": 4,
+    "hallmarks": [
+      "senescent cells accumulation",
+      "chromatin remodeling",
+      "transcriptional alterations",
+      "nuclear DNA instability"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "BIN1",
+    "name": "bridging integrator 1",
+    "bridge": 0.0744,
+    "betweenness": 0.0137,
+    "degree": 265,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "nuclear architecture impairment",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "NOS1",
+    "name": "nitric oxide synthase 1",
+    "bridge": 0.0706,
+    "betweenness": 0.0138,
+    "degree": 287,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "accumulation of reactive oxygen species",
+      "transcriptional alterations"
+    ],
+    "lifespan": "increases",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "WWOX",
+    "name": "WW domain containing oxidoreductase",
+    "bridge": 0.0706,
+    "betweenness": 0.0138,
+    "degree": 287,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "accumulation of reactive oxygen species",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "PBXIP1",
+    "name": "PBX homeobox interacting protein 1",
+    "bridge": 0.0675,
+    "betweenness": 0.0198,
+    "degree": 90,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "sterile inflammation",
+      "changes in the extracellular matrix structure"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "CLPX",
+    "name": "caseinolytic mitochondrial matrix peptidase chaperone subunit X",
+    "bridge": 0.0609,
+    "betweenness": 0.0149,
+    "degree": 44,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "degradation of proteolytic systems",
+      "impairment of proteins folding and stability"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "HDAC4",
+    "name": "histone deacetylase 4",
+    "bridge": 0.0458,
+    "betweenness": 0.0084,
+    "degree": 323,
+    "n_hallmarks": 3,
+    "hallmarks": [
+      "chromatin remodeling",
+      "transcriptional alterations",
+      "sterile inflammation"
+    ],
+    "lifespan": "increases",
+    "conf_name": "low"
+  },
+  {
+    "id": "KDM6B",
+    "name": "lysine demethylase 6B",
+    "bridge": 0.0458,
+    "betweenness": 0.0084,
+    "degree": 323,
+    "n_hallmarks": 3,
+    "hallmarks": [
+      "chromatin remodeling",
+      "sterile inflammation",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "HDAC5",
+    "name": "histone deacetylase 5",
+    "bridge": 0.0458,
+    "betweenness": 0.0084,
+    "degree": 323,
+    "n_hallmarks": 3,
+    "hallmarks": [
+      "chromatin remodeling",
+      "transcriptional alterations",
+      "sterile inflammation"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "DLD",
+    "name": "dihydrolipoamide dehydrogenase",
+    "bridge": 0.0439,
+    "betweenness": 0.0107,
+    "degree": 70,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "degradation of proteolytic systems",
+      "accumulation of reactive oxygen species"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "NAMPT",
+    "name": "nicotinamide phosphoribosyltransferase",
+    "bridge": 0.0437,
+    "betweenness": 0.0085,
+    "degree": 272,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "transcriptional alterations",
+      "INS/IGF-1 pathway dysregulation"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "ITGA6",
+    "name": "integrin subunit alpha 6",
+    "bridge": 0.0437,
+    "betweenness": 0.0085,
+    "degree": 272,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "INS/IGF-1 pathway dysregulation",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "XBP1",
+    "name": "X-box binding protein 1",
+    "bridge": 0.0434,
+    "betweenness": 0.0085,
+    "degree": 278,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "disabled macroautophagy",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "NFATC3",
+    "name": "nuclear factor of activated T cells 3",
+    "bridge": 0.0394,
+    "betweenness": 0.0072,
+    "degree": 318,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "transcriptional alterations",
+      "sterile inflammation"
+    ],
+    "lifespan": "increases",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "HDAC9",
+    "name": "histone deacetylase 9",
+    "bridge": 0.0394,
+    "betweenness": 0.0072,
+    "degree": 318,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "transcriptional alterations",
+      "sterile inflammation"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  },
+  {
+    "id": "DHX9",
+    "name": "DExH-box helicase 9",
+    "bridge": 0.0394,
+    "betweenness": 0.0072,
+    "degree": 318,
+    "n_hallmarks": 2,
+    "hallmarks": [
+      "sterile inflammation",
+      "transcriptional alterations"
+    ],
+    "lifespan": "unknown",
+    "conf_name": "lowest"
+  }
+]
